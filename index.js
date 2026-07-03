@@ -16,7 +16,7 @@ const express = require('express');
 // ==========================================
 // ⚙️ DATI PRE-CONFIGURATI EMBERMC
 // ==========================================
-const TOKEN = "MTUyMjM3OTE1MDc4OTQ0NzY5MA.G1L3Uz.OEFNHyqWBv4E0dRxURpS579vkOmnd3L-nDzodg";
+const TOKEN = "MTUyMjM3OTE1MDc4OTQ0NzY5MA.GNNYTX.cNWQUIWc98iWij9_NuKrW4kENCIbudRuaWiVqc";
 const RUOLO_STAFF_ID = "1522011549584064594"; 
 
 const WELCOME_CHANNEL_ID = "1522011550037315807";
