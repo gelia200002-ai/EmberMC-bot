@@ -312,4 +312,233 @@ client.on('interactionCreate', async (interaction) => {
       const embedHistory = new EmbedBuilder()
         .setTitle(`📊 Storico Player - @${targetUser.username}`)
         .setColor('#ea580c')
-        .setThumbnail(targetUser.displayAvatar
+        .setThumbnail(targetUser.displayAvatarURL())
+        .addFields(
+          { name: '🪙 Bilancio Economia', value: `**${coins} EmberCoins**`, inline: true },
+          { name: '⚠️ Ammonimenti (Warn)', value: `**${warnCount}/3**`, inline: true },
+          { name: '🎫 Registro Ticket Aperti', value: ticketText }
+        )
+        .setTimestamp();
+
+      return interaction.reply({ embeds: [embedHistory] });
+    }
+
+    if (commandName === 'rename') {
+      if (!channel.name.startsWith('ticket-')) {
+        return interaction.reply({ content: '❌ Puoi usare questo comando solo all\'interno di un canale ticket.', ephemeral: true });
+      }
+      const nuovoNome = options.getString('nome').toLowerCase().replace(/\s+/g, '-');
+      
+      try {
+        await channel.setName(`ticket-${nuovoNome}`);
+        return interaction.reply({ content: `📝 Il ticket è stato rinominato con successo in: \`ticket-${nuovoNome}\`` });
+      } catch (err) {
+        return interaction.reply({ content: '❌ Errore durante il cambio nome. Discord limita i cambi di nome troppo frequenti (Rate limit).', ephemeral: true });
+      }
+    }
+
+    if (commandName === 'compito') {
+      if (!channel.name.startsWith('ticket-')) {
+        return interaction.reply({ content: '❌ Puoi usare questo comando solo all\'interno di un canale ticket.', ephemeral: true });
+      }
+      const notaCompito = options.getString('nota');
+
+      const embedCompito = new EmbedBuilder()
+        .setTitle('📌 COMPITO/PROMEMORIA STAFF')
+        .setDescription(`**Cosa resta da fare:**\n\`\`\`text\n${notaCompito}\n\`\`\``)
+        .setColor('#eab308')
+        .addFields({ name: '✍️ Assegnato/Scritto da:', value: `${user}`, inline: true })
+        .setTimestamp();
+
+      return interaction.reply({ embeds: [embedCompito] });
+    }
+
+    if (commandName === 'tag') {
+      const tipo = options.getString('tipo');
+      let testoTag = '';
+      if (tipo === 'media') testoTag = '📌 **Requisiti Media**: Almeno 1000 iscritti su YouTube o 500 follower su Twitch con live costanti.';
+      if (tipo === 'staff') testoTag = '📌 **Requisiti Staff**: Età minima 16 anni, buona conoscenza del regolamento e disponibilità oraria.';
+      if (tipo === 'builder') testoTag = '📌 **Requisiti Builder**: Portfolio dimostrabile e padronanza di WorldEdit.';
+      return interaction.reply({ content: testoTag });
+    }
+
+    if (commandName === 'testo') {
+      const msg = options.getString('messaggio');
+      await interaction.reply({ content: 'Inviato!', ephemeral: true });
+      return channel.send({ content: msg });
+    }
+
+    if (commandName === 'add') {
+      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
+      const target = options.getUser('utente');
+      await channel.permissionOverwrites.edit(target.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
+      return interaction.reply({ content: `➕ ${target} è stato aggiunto al ticket.` });
+    }
+
+    if (commandName === 'remove') {
+      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
+      const target = options.getUser('utente');
+      await channel.permissionOverwrites.delete(target.id);
+      return interaction.reply({ content: `➖ ${target} è stato rimosso dal ticket.` });
+    }
+
+    if (commandName === 'claim') {
+      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
+      return interaction.reply({ content: `🔒 Questo ticket è stato preso in gestione da ${interaction.user}.` });
+    }
+
+    if (commandName === 'assign') {
+      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
+      const staffer = options.getUser('staffer');
+      return interaction.reply({ content: `📌 Ticket assegnato allo staffer: ${staffer}.` });
+    }
+
+    if (commandName === 'close') {
+      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
+      await interaction.reply({ content: '⚠️ Il ticket verrà chiuso tra 5 secondi...' });
+      setTimeout(async () => {
+        ticketOwners.delete(channel.id);
+        lastWarns.delete(channel.id);
+        await channel.delete().catch(() => {});
+      }, 5000);
+    }
+  }
+
+  if (interaction.isButton()) {
+    const { customId, user, guild } = interaction;
+
+    if (customId.startsWith('make_')) {
+      await interaction.deferReply({ ephemeral: true });
+      const tipoScelto = customId.replace('make_', '');
+      
+      const categoriaIdDestinazione = CATEGORIE_TICKET[tipoScelto] || Object.values(CATEGORIE_TICKET)[0];
+
+      let currentCount = ticketCounts.get(tipoScelto) || 0;
+      currentCount++;
+      ticketCounts.set(tipoScelto, currentCount);
+
+      const numeroFormattato = String(currentCount).padStart(3, '0');
+      const nomeCanale = `ticket-${tipoScelto}-${numeroFormattato}`;
+
+      try {
+        const ticketChannel = await guild.channels.create({
+          name: nomeCanale,
+          type: ChannelType.GuildText,
+          parent: categoriaIdDestinazione,
+          permissionOverwrites: [
+            { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+            { id: RUOLO_STAFF_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+          ]
+        });
+
+        ticketOwners.set(ticketChannel.id, user.id);
+
+        const playerHistory = userTicketHistory.get(user.id) || [];
+        const dataOggi = new Date().toLocaleDateString('it-IT');
+        playerHistory.push({ categoria: tipoScelto, data: dataOggi });
+        userTicketHistory.set(user.id, playerHistory);
+
+        await ticketChannel.send({
+          content: `👋 Benvenuto nel tuo ticket per **${tipoScelto.toUpperCase()}** ${user}, lo <@&${RUOLO_STAFF_ID}> ti assisterà a breve.\nDescrivi pure il tuo problema.`
+        });
+
+        return interaction.editReply({ content: `✅ Ticket creato con successo: ${ticketChannel}` });
+      } catch (err) {
+        console.error(err);
+        return interaction.editReply({ content: '❌ Errore durante la creazione del ticket. Verifica i permessi delle categorie del Bot.' });
+      }
+    }
+
+    if (customId === 'click_modalita') {
+      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - MODE').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
+      const rowSurvival = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_survival').setLabel('⭐ Survival / Survival').setStyle(ButtonStyle.Secondary));
+      const rowLifesteal = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_lifesteal').setLabel('❤️ Lifesteal / Lifesteal').setStyle(ButtonStyle.Secondary));
+      const rowBedwars = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_bedwars').setLabel('🛏️ Bedwars / Bedwars').setStyle(ButtonStyle.Secondary));
+      const rowKitpvp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_kitpvp').setLabel('⚔️ Kitpvp / Kitpvp').setStyle(ButtonStyle.Secondary));
+      const rowOneblock = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_oneblock').setLabel('📦 OneBlock / OneBlock').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({ embeds: [embed], components: [rowSurvival, rowLifesteal, rowBedwars, rowKitpvp, rowOneblock], ephemeral: true });
+    }
+
+    if (customId === 'click_account') {
+      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - ACCOUNT').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
+      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_reset-pass').setLabel('⚙️ Richiesta Reset Password').setStyle(ButtonStyle.Secondary));
+      const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_transfer').setLabel('🔄 Trasferimento Account').setStyle(ButtonStyle.Secondary));
+      const r3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_login').setLabel('🔑 Problemi al Login-Register').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({ embeds: [embed], components: [r1, r2, r3], ephemeral: true });
+    }
+
+    if (customId === 'click_generale') {
+      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - GENERAL').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
+      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_generica').setLabel('📍 Richiesta Generale').setStyle(ButtonStyle.Secondary));
+      const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_contestazione').setLabel('🔨 Contestazione Infrazione').setStyle(ButtonStyle.Secondary));
+      const r3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_segnalazione').setLabel('⚠️ Segnalazione Utente').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({ embeds: [embed], components: [r1, r2, r3], ephemeral: true });
+    }
+
+    if (customId === 'click_commerciale') {
+      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - COMMERCIAL').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
+      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_domande-comm').setLabel('💬 Domande Commerciali').setStyle(ButtonStyle.Secondary));
+      const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_rimborso').setLabel('💰 Richiesta Rimborso').setStyle(ButtonStyle.Secondary));
+      const r3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_problemi-store').setLabel('🧾 Problemi con lo Store').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({ embeds: [embed], components: [r1, r2, r3], ephemeral: true });
+    }
+
+    if (customId === 'click_candidature') {
+      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - CANDIDATURE').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
+      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_candidatura').setLabel('💼 Candidature').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({ embeds: [embed], components: [r1], ephemeral: true });
+    }
+
+    if (customId === 'click_eventi') {
+      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - EVENTO').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
+      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_evento-ticket').setLabel('🎁 Partecipazione Eventi / Event Support').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({ embeds: [embed], components: [r1], ephemeral: true });
+    }
+  }
+});
+
+async function checkTicketInactivity() {
+  const guilds = client.guilds.cache;
+  for (const [_, guild] of guilds) {
+    const tutteLeCategorie = Object.values(CATEGORIE_TICKET);
+    const ticketChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText && tutteLeCategorie.includes(c.parentId) && c.name.startsWith('ticket-'));
+
+    for (const [_, channel] of ticketChannels) {
+      try {
+        const messages = await channel.messages.fetch({ limit: 1 });
+        const lastMessage = messages.first();
+        if (!lastMessage) continue;
+
+        const orarioUltimoMessaggio = lastMessage.createdTimestamp;
+        const tempoPassato = Date.now() - orarioUltimoMessaggio;
+        const cinqueOre = 5 * 60 * 60 * 1000;
+
+        if (tempoPassato >= cinqueOre) {
+          const lastWarn = lastWarns.get(channel.id);
+          if (lastWarn && orarioUltimoMessaggio <= lastWarn) continue; 
+
+          const author = lastMessage.author;
+          if (author.bot) continue;
+
+          const member = await guild.members.fetch(author.id).catch(() => null);
+          if (!member) continue;
+
+          const isStaff = member.roles.cache.has(RUOLO_STAFF_ID) || member.permissions.has(PermissionFlagsBits.Administrator);
+          const ownerId = ticketOwners.get(channel.id);
+
+          if (isStaff) {
+            await channel.send(`⚠️ Il ticket necessita di una risposta da parte del player. <@${ownerId || ''}>`);
+          } else {
+            await channel.send(`⚠️ Il ticket necessita di una risposta da parte dello staff. <@&${RUOLO_STAFF_ID}>`);
+          }
+          lastWarns.set(channel.id, Date.now());
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
+
+client.login(TOKEN);
