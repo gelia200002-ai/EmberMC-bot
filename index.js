@@ -205,7 +205,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (commandName === 'store') {
-      return interaction.reply({ content: `🛒 Visita il nostro store ufficiale qui: ${LINK_STORE}`, ephemeral: true });
+      return interaction.reply({ content: `🛒 Visita il nostro store ufficiale hier: ${LINK_STORE}`, ephemeral: true });
     }
 
     if (commandName === 'daily') {
@@ -306,4 +306,10 @@ client.on('interactionCreate', async (interaction) => {
       const historyList = userTicketHistory.get(targetUser.id) || [];
 
       let ticketText = historyList.length > 0 
-        ? historyList.map((t, idx) => `${idx + 1}. \
+        ? historyList.map((t, idx) => `${idx + 1}. \`[${t.data}]\` Categoria: **${t.categoria.toUpperCase()}**`).join('\n')
+        : "Nessun ticket registrato nello storico di questa sessione.";
+
+      const embedHistory = new EmbedBuilder()
+        .setTitle(`📊 Storico Player - @${targetUser.username}`)
+        .setColor('#ea580c')
+        .setThumbnail(targetUser.displayAvatar
