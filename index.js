@@ -52,8 +52,6 @@ const ticketCounts = new Map();
 const lastWarns = new Map();
 const ecoCoins = new Map();
 const ecoDaily = new Map();
-
-// Nuove memorie per Moderazione e Storico Ticket
 const userWarns = new Map(); 
 const userTicketHistory = new Map(); 
 // ==========================================
@@ -71,7 +69,6 @@ const client = new Client({
   ]
 });
 
-// Helper per convertire stringhe di tempo (es. 10m, 2h, 1d) in millisecondi
 function parseDuration(str) {
   if (!str) return null;
   const match = str.match(/^(\d+)([mhdd])$/);
@@ -91,7 +88,6 @@ const commands = [
   new SlashCommandBuilder().setName('daily').setDescription('Riscatta i tuoi EmberCoin giornalieri (1-10)'),
   new SlashCommandBuilder().setName('store').setDescription('Mostra il link dello store del server'),
   
-  // COMANDI DI MODERAZIONE AGGIUNTI
   new SlashCommandBuilder().setName('warn').setDescription('Assegna un ammonimento a un player (3 warn = 10m mute) (Solo Staff)')
     .addUserOption(opt => opt.setName('player').setDescription('Il player da ammonire').setRequired(true))
     .addStringOption(opt => opt.setName('motivo').setDescription('Motivo del warn').setRequired(true)),
@@ -106,9 +102,14 @@ const commands = [
     .addStringOption(opt => opt.setName('motivo').setDescription('Motivo del ban').setRequired(true))
     .addStringOption(opt => opt.setName('durata').setDescription('Durata (es: 7d) o inserisci "-s" per Permanente').setRequired(true)),
   
-  // COMANDO HISTORY AGGIUNTO
   new SlashCommandBuilder().setName('history').setDescription('Mostra lo storico dei ticket aperti e la situazione economica di un player (Solo Staff)')
     .addUserOption(opt => opt.setName('player').setDescription('Il player di cui verificare lo storico').setRequired(true)),
+
+  new SlashCommandBuilder().setName('rename').setDescription('Rinomina il ticket corrente (Solo Staff)')
+    .addStringOption(opt => opt.setName('nome').setDescription('Nuovo nome da assegnare al ticket').setRequired(true)),
+
+  new SlashCommandBuilder().setName('compito').setDescription('Aggiunge un promemoria/compito da svolgere per questo ticket (Solo Staff)')
+    .addStringOption(opt => opt.setName('nota').setDescription('Cosa resta da fare (es: assegnare targhetta MVP a Elox)').setRequired(true)),
 
   new SlashCommandBuilder().setName('tag')
     .setDescription('Mostra i requisiti richiesti (Solo Staff)')
@@ -146,7 +147,6 @@ client.once('ready', async () => {
   setInterval(checkTicketInactivity, 60000);
 });
 
-// 🎉 MESSAGGIO DI BENVENUTO STRUTTURATO AD EMBED
 client.on('guildMemberAdd', async (member) => {
   const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
   if (!channel) return;
@@ -193,7 +193,6 @@ client.on('guildMemberAdd', async (member) => {
   channel.send({ content: `Benvenuto ${member}!`, embeds: [embedWelcome], components: [rowButtons1, rowButtons2] });
 });
 
-// INTERAZIONI COMANDI SLASH E BOTTONI
 client.on('interactionCreate', async (interaction) => {
   const isStaff = interaction.member?.roles.cache.has(RUOLO_STAFF_ID) || interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
 
@@ -230,9 +229,6 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: `🪙 Hai ottenuto **${casuale} EmberCoin**! Totale attuale: **${attuali + casuale}**.` });
     }
 
-    // ==========================================
-    // 🔨 LOGICA NUOVI COMANDI DI MODERAZIONE
-    // ==========================================
     if (commandName === 'warn') {
       const targetUser = options.getUser('player');
       const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
@@ -245,7 +241,7 @@ client.on('interactionCreate', async (interaction) => {
       userWarns.set(targetUser.id, currentWarns);
 
       if (currentWarns >= 3) {
-        userWarns.set(targetUser.id, 0); // Resetta i warn dopo la sanzione
+        userWarns.set(targetUser.id, 0); 
         try {
           await targetMember.timeout(10 * 60 * 1000, "Raggiungimento dei 3 ammonimenti (Warn)");
           return interaction.reply({ content: `⚠️ ${targetUser} ha ricevuto il suo 3° Warn. Motivo: **${motivo}**. Scattato il **Mute automatico di 10 minuti**!` });
@@ -291,7 +287,6 @@ client.on('interactionCreate', async (interaction) => {
           
           await guild.members.ban(targetUser.id, { reason: `Temporaneo (${durataStr}) - ${motivo}` });
           
-          // Rimuove il ban automaticamente al termine della durata (Ban temporaneo simulato)
           setTimeout(async () => {
             await guild.members.unban(targetUser.id, "Fine durata ban temporaneo").catch(() => {});
           }, ms);
@@ -303,9 +298,6 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
-    // ==========================================
-    // 🔍 LOGICA COMANDO HISTORY
-    // ==========================================
     if (commandName === 'history') {
       const targetUser = options.getUser('player');
       
@@ -314,263 +306,4 @@ client.on('interactionCreate', async (interaction) => {
       const historyList = userTicketHistory.get(targetUser.id) || [];
 
       let ticketText = historyList.length > 0 
-        ? historyList.map((t, idx) => `${idx + 1}. \`[${t.data}]\` Categoria: **${t.categoria.toUpperCase()}**`).join('\n')
-        : "Nessun ticket registrato nello storico di questa sessione.";
-
-      const embedHistory = new EmbedBuilder()
-        .setTitle(`📊 Storico Player - @${targetUser.username}`)
-        .setColor('#ea580c')
-        .setThumbnail(targetUser.displayAvatarURL())
-        .addFields(
-          { name: '🪙 Bilancio Economia', value: `**${coins} EmberCoins**`, inline: true },
-          { name: '⚠️ Ammonimenti (Warn)', value: `**${warnCount}/3**`, inline: true },
-          { name: '🎫 Registro Ticket Aperti', value: ticketText }
-        )
-        .setTimestamp();
-
-      return interaction.reply({ embeds: [embedHistory] });
-    }
-
-    if (commandName === 'ticket') {
-      await interaction.reply({ content: 'Generazione dei pannelli in corso...', ephemeral: true });
-
-      const embedIntro = new EmbedBuilder()
-        .setTitle('🛰️ EMBERMC TICKETS')
-        .setDescription('Clicca uno dei bottoni di seguito per aprire un ticket in base alla tipologia di supporto desiderata.\n\n*Click one of the buttons below to open a ticket based on the type of support you want.*')
-        .setColor('#2b2d31');
-      await channel.send({ embeds: [embedIntro] });
-
-      const embedMod = new EmbedBuilder()
-        .setTitle('🎮 Modalità (Mode-specific)')
-        .setDescription('Per richieste specifiche di supporto per una modalità del Network o per segnalazioni di giocatori o di bug.\n*For in-game mode specific questions or to report players/bugs.*')
-        .setColor('#2b2d31');
-      const rowMod = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('click_modalita').setLabel('🎮 Seleziona/Select').setStyle(ButtonStyle.Success));
-      await channel.send({ embeds: [embedMod], components: [rowMod] });
-
-      const embedAcc = new EmbedBuilder()
-        .setTitle('🔑 Account (Account)')
-        .setDescription('Per aiuto nella gestione del proprio account, richiedere trasferimenti, reset password, etc.\n*For help with account management, transfers, password resets, etc.*')
-        .setColor('#2b2d31');
-      const rowAcc = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('click_account').setLabel('🔑 Seleziona/Select').setStyle(ButtonStyle.Primary));
-      await channel.send({ embeds: [embedAcc], components: [rowAcc] });
-
-      const embedGen = new EmbedBuilder()
-        .setTitle('📝 Generale (General)')
-        .setDescription('Per richieste generiche, contestazioni punizioni, segnalazioni utenti o problemi voto. Per richieste specifiche usa il tasto Supporto Modalità.\n*For general questions, contesting punishments, reporting users or voting issues. For mode-specific questions use the Mode Support button.*')
-        .setColor('#2b2d31');
-      const rowGen = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('click_generale').setLabel('📝 Seleziona/Select').setStyle(ButtonStyle.Secondary));
-      await channel.send({ embeds: [embedGen], components: [rowGen] });
-
-      const embedCom = new EmbedBuilder()
-        .setTitle('💵 Commerciale (Commercial)')
-        .setDescription('Per richiedere supporto generale negli acquisti, recuperare un pacchetto VIP, riscattare la Sub di Twitch oppure richiedere una collaborazione.\n*For general help with purchases, retrieving a VIP package, redeeming the Twitch Sub or requesting a collaboration.*')
-        .setColor('#2b2d31');
-      const rowCom = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('click_commerciale').setLabel('💵 Seleziona/Select').setStyle(ButtonStyle.Primary));
-      await channel.send({ embeds: [embedCom], components: [rowCom] });
-
-      const embedCand = new EmbedBuilder()
-        .setTitle('📝 Candidature (Staff Applications)')
-        .setDescription('Per richieste di arruolamento nel nostro Staff.\n*To apply for a position in our Staff.*')
-        .setColor('#2b2d31');
-      const rowCand = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('click_candidature').setLabel('📝 Seleziona/Select').setStyle(ButtonStyle.Secondary));
-      await channel.send({ embeds: [embedCand], components: [rowCand] });
-
-      const embedEv = new EmbedBuilder()
-        .setTitle('🎉 Eventi (Events)')
-        .setDescription('Categoria dedicata agli eventi organizzati da EmberMC.\n*Category dedicated to events organized by EmberMC.*\n\nSei blacklistato? [Compila il form di contestazione](https://google.com)')
-        .setColor('#2b2d31');
-      const rowEv = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('click_eventi').setLabel('🎉 Seleziona/Select').setStyle(ButtonStyle.Primary));
-      await channel.send({ embeds: [embedEv], components: [rowEv] });
-      return;
-    }
-
-    if (commandName === 'tag') {
-      const tipo = options.getString('tipo');
-      let testoTag = '';
-      if (tipo === 'media') testoTag = '📌 **Requisiti Media**: Almeno 1000 iscritti su YouTube o 500 follower su Twitch con live costanti.';
-      if (tipo === 'staff') testoTag = '📌 **Requisiti Staff**: Età minima 16 anni, buona conoscenza del regolamento e disponibilità oraria.';
-      if (tipo === 'builder') testoTag = '📌 **Requisiti Builder**: Portfolio dimostrabile e padronanza di WorldEdit.';
-      return interaction.reply({ content: testoTag });
-    }
-
-    if (commandName === 'testo') {
-      const msg = options.getString('messaggio');
-      await interaction.reply({ content: 'Inviato!', ephemeral: true });
-      return channel.send({ content: msg });
-    }
-
-    if (commandName === 'add') {
-      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
-      const target = options.getUser('utente');
-      await channel.permissionOverwrites.edit(target.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-      return interaction.reply({ content: `➕ ${target} è stato aggiunto al ticket.` });
-    }
-
-    if (commandName === 'remove') {
-      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
-      const target = options.getUser('utente');
-      await channel.permissionOverwrites.delete(target.id);
-      return interaction.reply({ content: `➖ ${target} è stato rimosso dal ticket.` });
-    }
-
-    if (commandName === 'claim') {
-      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
-      return interaction.reply({ content: `🔒 Questo ticket è stato preso in gestione da ${interaction.user}.` });
-    }
-
-    if (commandName === 'assign') {
-      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
-      const staffer = options.getUser('staffer');
-      return interaction.reply({ content: `📌 Ticket assegnato allo staffer: ${staffer}.` });
-    }
-
-    if (commandName === 'close') {
-      if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Usa questo comando solo dentro un ticket.', ephemeral: true });
-      await interaction.reply({ content: '⚠️ Il ticket verrà chiuso tra 5 secondi...' });
-      setTimeout(async () => {
-        ticketOwners.delete(channel.id);
-        lastWarns.delete(channel.id);
-        await channel.delete().catch(() => {});
-      }, 5000);
-    }
-  }
-
-  if (interaction.isButton()) {
-    const { customId, user, guild } = interaction;
-
-    if (customId.startsWith('make_')) {
-      await interaction.deferReply({ ephemeral: true });
-      const tipoScelto = customId.replace('make_', '');
-      
-      const categoriaIdDestinazione = CATEGORIE_TICKET[tipoScelto] || Object.values(CATEGORIE_TICKET)[0];
-
-      let currentCount = ticketCounts.get(tipoScelto) || 0;
-      currentCount++;
-      ticketCounts.set(tipoScelto, currentCount);
-
-      const numeroFormattato = String(currentCount).padStart(3, '0');
-      const nomeCanale = `ticket-${tipoScelto}-${numeroFormattato}`;
-
-      try {
-        const ticketChannel = await guild.channels.create({
-          name: nomeCanale,
-          type: ChannelType.GuildText,
-          parent: categoriaIdDestinazione,
-          permissionOverwrites: [
-            { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-            { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-            { id: RUOLO_STAFF_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
-          ]
-        });
-
-        ticketOwners.set(ticketChannel.id, user.id);
-
-        // 📝 SALVATAGGIO NELLO STORICO DEL PLAYER
-        const playerHistory = userTicketHistory.get(user.id) || [];
-        const dataOggi = new Date().toLocaleDateString('it-IT');
-        playerHistory.push({ categoria: tipoScelto, data: dataOggi });
-        userTicketHistory.set(user.id, playerHistory);
-
-        await ticketChannel.send({
-          content: `👋 Benvenuto nel tuo ticket per **${tipoScelto.toUpperCase()}** ${user}, lo <@&${RUOLO_STAFF_ID}> ti assisterà a breve.\nDescrivi pure il tuo problema.`
-        });
-
-        return interaction.editReply({ content: `✅ Ticket creato con successo: ${ticketChannel}` });
-      } catch (err) {
-        console.error(err);
-        return interaction.editReply({ content: '❌ Errore durante la creazione del ticket. Verifica i permessi delle categorie del Bot.' });
-      }
-    }
-
-    if (customId === 'click_modalita') {
-      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - MODE').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
-      const rowSurvival = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_survival').setLabel('⭐ Survival / Survival').setStyle(ButtonStyle.Secondary));
-      const rowLifesteal = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_lifesteal').setLabel('❤️ Lifesteal / Lifesteal').setStyle(ButtonStyle.Secondary));
-      const rowBedwars = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_bedwars').setLabel('🛏️ Bedwars / Bedwars').setStyle(ButtonStyle.Secondary));
-      const rowKitpvp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_kitpvp').setLabel('⚔️ Kitpvp / Kitpvp').setStyle(ButtonStyle.Secondary));
-      const rowOneblock = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_oneblock').setLabel('📦 OneBlock / OneBlock').setStyle(ButtonStyle.Secondary));
-      return interaction.reply({ embeds: [embed], components: [rowSurvival, rowLifesteal, rowBedwars, rowKitpvp, rowOneblock], ephemeral: true });
-    }
-
-    if (customId === 'click_account') {
-      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - ACCOUNT').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
-      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_reset-pass').setLabel('⚙️ Richiesta Reset Password').setStyle(ButtonStyle.Secondary));
-      const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_transfer').setLabel('🔄 Trasferimento Account').setStyle(ButtonStyle.Secondary));
-      const r3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_login').setLabel('🔑 Problemi al Login-Register').setStyle(ButtonStyle.Secondary));
-      return interaction.reply({ embeds: [embed], components: [r1, r2, r3], ephemeral: true });
-    }
-
-    if (customId === 'click_generale') {
-      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - GENERAL').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
-      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_generica').setLabel('📍 Richiesta Generale').setStyle(ButtonStyle.Secondary));
-      const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_contestazione').setLabel('🔨 Contestazione Infrazione').setStyle(ButtonStyle.Secondary));
-      const r3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_segnalazione').setLabel('⚠️ Segnalazione Utente').setStyle(ButtonStyle.Secondary));
-      return interaction.reply({ embeds: [embed], components: [r1, r2, r3], ephemeral: true });
-    }
-
-    if (customId === 'click_commerciale') {
-      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - COMMERCIAL').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
-      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_domande-comm').setLabel('💬 Domande Commerciali').setStyle(ButtonStyle.Secondary));
-      const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_rimborso').setLabel('💰 Richiesta Rimborso').setStyle(ButtonStyle.Secondary));
-      const r3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_problemi-store').setLabel('🧾 Problemi con lo Store').setStyle(ButtonStyle.Secondary));
-      return interaction.reply({ embeds: [embed], components: [r1, r2, r3], ephemeral: true });
-    }
-
-    if (customId === 'click_candidature') {
-      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - CANDIDATURE').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
-      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_candidatura').setLabel('💼 Candidature').setStyle(ButtonStyle.Secondary));
-      return interaction.reply({ embeds: [embed], components: [r1], ephemeral: true });
-    }
-
-    if (customId === 'click_eventi') {
-      const embed = new EmbedBuilder().setTitle('EMBERMC TICKETS - EVENTO').setDescription('Seleziona una categoria di seguito per aprire un ticket in base alla tipologia di supporto desiderata.').setColor('#2b2d31');
-      const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('make_evento-ticket').setLabel('🎁 Partecipazione Eventi / Event Support').setStyle(ButtonStyle.Secondary));
-      return interaction.reply({ embeds: [embed], components: [r1], ephemeral: true });
-    }
-  }
-});
-
-async function checkTicketInactivity() {
-  const guilds = client.guilds.cache;
-  for (const [_, guild] of guilds) {
-    const tutteLeCategorie = Object.values(CATEGORIE_TICKET);
-    const ticketChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText && tutteLeCategorie.includes(c.parentId) && c.name.startsWith('ticket-'));
-
-    for (const [_, channel] of ticketChannels) {
-      try {
-        const messages = await channel.messages.fetch({ limit: 1 });
-        const lastMessage = messages.first();
-        if (!lastMessage) continue;
-
-        const orarioUltimoMessaggio = lastMessage.createdTimestamp;
-        const tempoPassato = Date.now() - orarioUltimoMessaggio;
-        const cinqueOre = 5 * 60 * 60 * 1000;
-
-        if (tempoPassato >= cinqueOre) {
-          const lastWarn = lastWarns.get(channel.id);
-          if (lastWarn && orarioUltimoMessaggio <= lastWarn) continue; 
-
-          const author = lastMessage.author;
-          if (author.bot) continue;
-
-          const member = await guild.members.fetch(author.id).catch(() => null);
-          if (!member) continue;
-
-          const isStaff = member.roles.cache.has(RUOLO_STAFF_ID) || member.permissions.has(PermissionFlagsBits.Administrator);
-          const ownerId = ticketOwners.get(channel.id);
-
-          if (isStaff) {
-            await channel.send(`⚠️ Il ticket necessita di una risposta da parte del player. <@${ownerId || ''}>`);
-          } else {
-            await channel.send(`⚠️ Il ticket necessita di una risposta da parte dello staff. <@&${RUOLO_STAFF_ID}>`);
-          }
-          lastWarns.set(channel.id, Date.now());
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
-  }
-}
-
-client.login(TOKEN);
+        ? historyList.map((t, idx) => `${idx + 1}. \
