@@ -19,7 +19,7 @@ const express = require('express');
 const TOKEN = process.env.TOKEN;
 const RUOLO_STAFF_ID = "1522011549584064594"; 
 const RUOLO_STAFF_DISCORD_ID = "1522011549584064592";
-const ROLE_MEMBRO_ID = "1522011549575942195"; // ID Corretto!
+const ROLE_MEMBRO_ID = "1522011549575942195";
 
 const WELCOME_CHANNEL_ID = "1522011550037315807";
 const CANALE_REGOLAMENTO_ID = "1522011550221729865";
@@ -119,6 +119,9 @@ function parseDuration(str) {
   }
 }
 
+// ==========================================
+// 🚀 REGISTRAZIONE COMANDI (CORRETTA)
+// ==========================================
 const commands = [
   new SlashCommandBuilder().setName('ticket').setDescription('Invia il pannello principale per i ticket (Staff Only)'),
   new SlashCommandBuilder().setName('daily').setDescription('Riscatta i tuoi EmberCoin giornalieri (1-10)'),
@@ -149,13 +152,24 @@ const commands = [
 
   new SlashCommandBuilder().setName('rename').setDescription('Rinomina il ticket corrente (Staff Only)')
     .addStringOption(opt => opt.setName('nome').setDescription('Nuovo nome').setRequired(true)),
-  new SlashCommandBuilder().setName('add').setDescription('Aggiungi un utente al ticket (Staff Only)').addUserOption(opt => opt.setName('utente').setRequired(true)),
-  new SlashCommandBuilder().setName('remove').setDescription('Rimuovi un utente dal ticket (Staff Only)').addUserOption(opt => opt.setName('utente').setRequired(true)),
+  
+  new SlashCommandBuilder().setName('add').setDescription('Aggiungi un utente al ticket (Staff Only)')
+    .addUserOption(opt => opt.setName('utente').setDescription('L\'utente da aggiungere al ticket').setRequired(true)),
+  
+  new SlashCommandBuilder().setName('remove').setDescription('Rimuovi un utente dal ticket (Staff Only)')
+    .addUserOption(opt => opt.setName('utente').setDescription('L\'utente da rimuovere dal ticket').setRequired(true)),
+  
   new SlashCommandBuilder().setName('claim').setDescription('Prendi in gestione questo ticket (Staff Only)'),
-  new SlashCommandBuilder().setName('assign').setDescription('Assegna il ticket a un altro staffer (Staff Only)').addUserOption(opt => opt.setName('staffer').setRequired(true)),
+  
+  new SlashCommandBuilder().setName('assign').setDescription('Assegna il ticket a un altro staffer (Staff Only)')
+    .addUserOption(opt => opt.setName('staffer').setDescription('Lo staffer a cui affidare il ticket').setRequired(true)),
+  
   new SlashCommandBuilder().setName('close').setDescription('Chiudi il ticket corrente (Staff Only)')
 ].map(cmd => cmd.toJSON());
 
+// ==========================================
+// 🚀 EVENTI DEL BOT
+// ==========================================
 client.once('ready', async () => {
   console.log(`Bot avviato come ${client.user.tag}`);
   try {
@@ -333,7 +347,7 @@ client.on('interactionCreate', async (interaction) => {
       if (m && ms) {
         await m.timeout(ms, motivo);
         const lista = userPunizioni.get(targetUser.id) || [];
-        lista.push({ tipo: "mute", motivo: motivo, durata: durata }); // Errore rimosso qui!
+        lista.push({ tipo: "mute", motivo: motivo, durata: durata });
         userPunizioni.set(targetUser.id, lista);
         return interaction.reply({ content: `🔇 Muto applicato a ${targetUser} per ${durata}.` });
       }
