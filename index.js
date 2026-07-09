@@ -12,6 +12,7 @@ const {
   SlashCommandBuilder
 } = require('discord.js');
 const express = require('express');
+const Enmap = require('enmap'); // 💾 NUOVO: Modulo per il Database persistente
 
 // ==========================================
 // ⚙️ CONFIGURAZIONE ID EMBERMC
@@ -27,7 +28,7 @@ const CANALE_ANNUNCI_ID = "1522398345124122784";
 const CANALE_INFORMAZIONI_ID = "1522011550221729868";
 const CANALE_GENERALE_ID = "1522011550221729871";
 
-const LINK_STORE = "https://store.embermc.it";
+const LINK_STORE = "https://ember-forge-play.base44.app/";
 
 const CATEGORIE_TICKET = {
   "generica": "1522011550833967266", "contestazione": "1522011550833967266", "segnalazione": "1522011550833967266",
@@ -38,17 +39,24 @@ const CATEGORIE_TICKET = {
   "domande-comm": "1522394622993629245", "rimborso": "1522394622993629245", "problemi-store": "1522394622993629245"
 };
 
+// ==========================================
+// 💾 DATABASE PERSISTENTE E MAPPE TEMPORANEE
+// ==========================================
+// Dati che NON andranno mai persi al riavvio
+const ecoCoins = new Enmap({ name: 'ecoCoins' });
+const ecoDaily = new Enmap({ name: 'ecoDaily' });
+const userWarns = new Enmap({ name: 'userWarns' }); 
+const userTicketHistory = new Enmap({ name: 'userTicketHistory' }); 
+const userPunizioni = new Enmap({ name: 'userPunizioni' }); 
+const statMessaggi = new Enmap({ name: 'statMessaggi' }); 
+const statVocale = new Enmap({ name: 'statVocale' }); 
+const partnerStats = new Enmap({ name: 'partnerStats' }); 
+
+// Dati temporanei legati alla sessione in corso (non serve salvarli nel DB)
 const ticketOwners = new Map();
 const ticketAssigned = new Map(); 
 const ticketCounts = new Map();
 const lastWarns = new Map();
-const ecoCoins = new Map();
-const ecoDaily = new Map();
-const userWarns = new Map(); 
-const userTicketHistory = new Map(); 
-const userPunizioni = new Map(); 
-const statMessaggi = new Map(); 
-const statVocale = new Map(); 
 const vocaleInizio = new Map(); 
 let meseCorrente = new Date().getMonth();
 
@@ -65,6 +73,57 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates
   ]
 });
+
+// ==========================================
+// 📊 FUNZIONE AUTOMATICA SERVERSTATS
+// ==========================================
+async function aggiornaServerStats(guild) {
+  try {
+    const members = await guild.members.fetch();
+    const totaleMembri = members.size;
+    const totaleUtenti = members.filter(m => !m.user.bot).size;
+    const totaleBot = members.filter(m => m.user.bot).size;
+
+    let categoriaStats = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.includes("STATISTICHE EMBERMC"));
+    if (!categoriaStats) {
+      categoriaStats = await guild.channels.create({
+        name: "📊 STATISTICHE EMBERMC",
+        type: ChannelType.GuildCategory,
+        position: 0
+      });
+    }
+
+    const nomiContatori = [
+      { chiave: "📊 Totale Membri:", valore: totaleMembri },
+      { chiave: "👤 Utenti:", valore: totaleUtenti },
+      { chiave: "🤖 Bot:", valore: totaleBot }
+    ];
+
+    for (const contatore of nomiContatori) {
+      const nomeCanaleAtteso = `${contatore.chiave} ${contatore.valore}`;
+      let canaleContatore = guild.channels.cache.find(c => c.type === ChannelType.GuildVoice && c.parentId === categoriaStats.id && c.name.startsWith(contatore.chiave));
+      
+      if (!canaleContatore) {
+        await guild.channels.create({
+          name: nomeCanaleAtteso,
+          type: ChannelType.GuildVoice,
+          parent: categoriaStats.id,
+          permissionOverwrites: [
+            {
+              id: guild.id,
+              deny: [PermissionFlagsBits.Connect], 
+              allow: [PermissionFlagsBits.ViewChannel] 
+            }
+          ]
+        });
+      } else if (canaleContatore.name !== nomeCanaleAtteso) {
+        await canaleContatore.setName(nomeCanaleAtteso);
+      }
+    }
+  } catch (error) {
+    console.error("Errore nell'aggiornamento di ServerStats:", error);
+  }
+}
 
 async function inviaBenvenutoMembro(member) {
   try {
@@ -120,16 +179,32 @@ function parseDuration(str) {
 }
 
 // ==========================================
-// 🚀 REGISTRAZIONE COMANDI (CORRETTA)
+// 🚀 REGISTRAZIONE COMANDI
 // ==========================================
 const commands = [
   new SlashCommandBuilder().setName('ticket').setDescription('Invia il pannello principale per i ticket (Staff Only)'),
-  new SlashCommandBuilder().setName('daily').setDescription('Riscatta i tuoi EmberCoin giornalieri (1-10)'),
+  new SlashCommandBuilder().setName('daily').setDescription('Riscatta i tuoi EmberCoin giornalieri (da 1 a 200)'),
   new SlashCommandBuilder().setName('store').setDescription('Mostra il link dello store del server'),
   new SlashCommandBuilder().setName('history-ticket-assegnati').setDescription('Mostra la lista dei tuoi ticket in carico (Staff Only)'),
   new SlashCommandBuilder().setName('top-messaggi').setDescription('Mostra la top 10 dei membri più attivi in chat questo mese'),
   new SlashCommandBuilder().setName('top-vocale').setDescription('Mostra la top 10 dei membri che hanno passato più tempo in vocale questo mese'),
+  new SlashCommandBuilder().setName('leaderboard').setDescription('Mostra la top 10 dei giocatori con più EmberCoin e la tua posizione'),
   
+  new SlashCommandBuilder().setName('compito').setDescription('Assegna un compito a un player (Staff Only)')
+    .addUserOption(opt => opt.setName('player').setDescription('Il player a cui assegnare il compito').setRequired(true))
+    .addStringOption(opt => opt.setName('descrizione').setDescription('Descrizione del compito').setRequired(true)),
+  
+  new SlashCommandBuilder().setName('set').setDescription('Imposta il numero di EmberCoin a un player (Staff Only)')
+    .addUserOption(opt => opt.setName('player').setDescription('Il player da modificare').setRequired(true))
+    .addIntegerOption(opt => opt.setName('monete').setDescription('Numero di EmberCoin').setRequired(true)),
+
+  new SlashCommandBuilder().setName('testo').setDescription('Invia un messaggio normale o embed in un canale specifico (Staff Only)')
+    .addChannelOption(opt => opt.setName('canale').setDescription('Il canale dove inviare il messaggio').setRequired(true))
+    .addStringOption(opt => opt.setName('tipo').setDescription('Scegli se inviare un messaggio normale o un embed').setRequired(true)
+      .addChoices({ name: 'Normale', value: 'normale' }, { name: 'Embed', value: 'embed' }))
+    .addStringOption(opt => opt.setName('contenuto').setDescription('Il testo del messaggio o la descrizione dell\'embed').setRequired(true))
+    .addStringOption(opt => opt.setName('titolo').setDescription('Il titolo (valido solo se scegli Embed)').setRequired(false)),
+
   new SlashCommandBuilder().setName('punizioni').setDescription('Mostra lo storico delle punizioni di un player (Staff Only)')
     .addUserOption(opt => opt.setName('player').setDescription('Il player da verificare').setRequired(true)),
 
@@ -164,7 +239,52 @@ const commands = [
   new SlashCommandBuilder().setName('assign').setDescription('Assegna il ticket a un altro staffer (Staff Only)')
     .addUserOption(opt => opt.setName('staffer').setDescription('Lo staffer a cui affidare il ticket').setRequired(true)),
   
-  new SlashCommandBuilder().setName('close').setDescription('Chiudi il ticket corrente (Staff Only)')
+  new SlashCommandBuilder().setName('close').setDescription('Chiudi il ticket corrente (Staff Only)'),
+
+  new SlashCommandBuilder().setName('slots').setDescription('Scommetti i tuoi EmberCoin alla slot machine!')
+    .addIntegerOption(opt => opt.setName('scommessa').setDescription('Quantità di EmberCoin da scommettere').setRequired(true)),
+
+  new SlashCommandBuilder().setName('userinfo').setDescription('Visualizza le informazioni complete di un player (Staff Only)')
+    .addUserOption(opt => opt.setName('player').setDescription('Il player da esaminare').setRequired(true)),
+
+  new SlashCommandBuilder().setName('tag').setDescription('Invia una risposta preimpostata professionale (Staff Only)')
+    .addStringOption(opt => opt.setName('nome_tag').setDescription('Seleziona la risposta preimpostata').setRequired(true)
+      .addChoices(
+        { name: '1. Reset Password', value: 'reset_pass' },
+        { name: '2. Problemi Store/Mancato Arrivo', value: 'store_mancato' },
+        { name: '3. Segnalazione Cheater (Prove)', value: 'cheat_prove' },
+        { name: '4. Richiesta Unban/Unmute', value: 'richiesta_unban' },
+        { name: '5. Candidature Staff', value: 'candidature_staff' },
+        { name: '6. Candidature Media/Partner', value: 'candidature_media' },
+        { name: '7. Segnalazione Bug', value: 'segnalazione_bug' },
+        { name: '8. Trasferimento Account (Premium/SP)', value: 'transfer_account' },
+        { name: '9. Problemi di Lag/Connessione', value: 'lag_connessione' },
+        { name: '10. Furto/Grief nella Survival', value: 'furto_survival' },
+        { name: '11. Rimborso Item Persi per Bug', value: 'rimborso_bug' },
+        { name: '12. Insulti/Tossicità in Chat', value: 'tossicita_chat' },
+        { name: '13. Informazioni sui Provini', value: 'info_provini' },
+        { name: '14. Abuso di Potere (Staffer)', value: 'abuso_staff' },
+        { name: '15. Bug dello Store (Duplicati)', value: 'store_duplicato' },
+        { name: '16. Come Diventare Builder', value: 'info_builder' },
+        { name: '17. Problemi Login (IP/Porta)', value: 'problemi_login' },
+        { name: '18. Proposte Miglioramento', value: 'proposte_server' },
+        { name: '19. Candidatura Eventi/Builder', value: 'candidatura_eventi' },
+        { name: '20. Chiusura Ticket Inattivo', value: 'chiusura_inattivo' }
+      )),
+
+  new SlashCommandBuilder().setName('partner').setDescription('Gestisci le partnership del network (Staff Only)')
+    .addSubcommand(sub => sub.setName('add').setDescription('Registra una nuova partnership')
+      .addUserOption(opt => opt.setName('utente').setDescription('Il rappresentante del server partner').setRequired(true))
+      .addStringOption(opt => opt.setName('nome').setDescription('Nome del server partner').setRequired(true))
+      .addStringOption(opt => opt.setName('link').setDescription('Link d\'invito del partner').setRequired(true)))
+    .addSubcommand(sub => sub.setName('stats').setDescription('Mostra le statistiche partnership di un utente')
+      .addUserOption(opt => opt.setName('staffer').setDescription('Lo staffer da verificare').setRequired(true)))
+    .addSubcommand(sub => sub.setName('verificare').setDescription('Controlla la validità di un link d\'invito partner')
+      .addStringOption(opt => opt.setName('link').setDescription('Il link d\'invito da verificare').setRequired(true))),
+
+  new SlashCommandBuilder().setName('regala-coin').setDescription('Regala EmberCoin a un player durante un evento (Staff Only)')
+    .addUserOption(opt => opt.setName('player').setDescription('Il player che riceve il premio').setRequired(true))
+    .addIntegerOption(opt => opt.setName('monete').setDescription('Numero di EmberCoin da regalare').setRequired(true))
 ].map(cmd => cmd.toJSON());
 
 // ==========================================
@@ -178,6 +298,8 @@ client.once('ready', async () => {
     console.log('Comandi Slash configurati con successo!');
     
     for (const [_, guild] of client.guilds.cache) {
+      await aggiornaServerStats(guild);
+      
       const members = await guild.members.fetch();
       for (const [_, member] of members) {
         if (!member.user.bot && !member.roles.cache.has(ROLE_MEMBRO_ID)) {
@@ -229,6 +351,11 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 
 client.on('guildMemberAdd', async (member) => {
   await inviaBenvenutoMembro(member);
+  await aggiornaServerStats(member.guild);
+});
+
+client.on('guildMemberRemove', async (member) => {
+  await aggiornaServerStats(member.guild);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -242,38 +369,152 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand()) {
     const { commandName, options, channel, user, guild } = interaction;
 
-    const publicCommands = ['daily', 'store', 'top-messaggi', 'top-vocale'];
+    const publicCommands = ['daily', 'store', 'top-messaggi', 'top-vocale', 'leaderboard', 'slots'];
     if (!publicCommands.includes(commandName) && !isStaff) {
       return interaction.reply({ content: '❌ Comando riservato esclusivamente allo Staff ed allo Staff Discord.', ephemeral: true });
     }
 
-    if (commandName === 'store') return interaction.reply({ content: `🛒 Visita lo Store Ufficiale: ${LINK_STORE}`, ephemeral: true });
+    if (commandName === 'store') return interaction.reply({ content: `🛒 Visita lo Store Ufficiale di EmberMC: ${LINK_STORE}`, ephemeral: true });
 
     if (commandName === 'daily') {
       const lastDaily = ecoDaily.get(user.id) || 0;
       const now = Date.now();
-      if (now - lastDaily < 86400000) return interaction.reply({ content: `⏳ Puoi riscuoterlo una volta al giorno!`, ephemeral: true });
-      const casuale = Math.floor(Math.random() * 10) + 1;
-      ecoCoins.set(user.id, (ecoCoins.get(user.id) || 0) + casuale);
+      
+      if (now - lastDaily < 86400000) {
+        const tempoRimasto = 86400000 - (now - lastDaily);
+        const ore = Math.floor(tempoRimasto / (1000 * 60 * 60));
+        const minuti = Math.floor((tempoRimasto % (1000 * 60 * 60)) / (1000 * 60));
+        return interaction.reply({ content: `⏳ Puoi riscuotere il tuo daily una volta ogni 24 ore! Prova di nuovo tra **${ore} ore e ${minuti} minuti**.`, ephemeral: true });
+      }
+      
+      const casuale = Math.floor(Math.random() * 200) + 1;
+      const balance = ecoCoins.get(user.id) || 0;
+      ecoCoins.set(user.id, balance + casuale);
       ecoDaily.set(user.id, now);
-      return interaction.reply({ content: `🪙 Hai ottenuto **${casuale} EmberCoin**!` });
+      return interaction.reply({ content: `🪙 Complimenti! Hai estratto e riscattato **${casuale} EmberCoin** giornalieri!` });
+    }
+
+    if (commandName === 'leaderboard') {
+      // Dato che Enmap è iterabile o offre fetchEverything, estraiamo i dati così:
+      const allCoins = Array.from(ecoCoins.entries());
+      const sorted = allCoins.sort((a, b) => b[1] - a[1]);
+      const top10 = sorted.slice(0, 10);
+      
+      let userRank = sorted.findIndex(entry => entry[0] === user.id) + 1;
+      let userCoins = ecoCoins.get(user.id) || 0;
+      if (userRank === 0) userRank = "Non classificato";
+      
+      let desc = top10.length > 0 
+          ? top10.map((entry, index) => `${index + 1}. <@${entry[0]}> - **${entry[1]}** 🪙`).join('\n')
+          : "Nessun dato economico registrato finora.";
+      
+      const embed = new EmbedBuilder()
+          .setTitle("🏆 LEADERBOARD EMBERCOIN")
+          .setDescription(desc)
+          .setColor("#eab308")
+          .addFields({ name: 'La tua posizione', value: `Sei **#${userRank}** con **${userCoins}** EmberCoin.` });
+          
+      return interaction.reply({ embeds: [embed] });
+    }
+
+    if (commandName === 'slots') {
+      const scommessa = options.getInteger('scommessa');
+      const userCoins = ecoCoins.get(user.id) || 0;
+
+      if (scommessa <= 0) {
+        return interaction.reply({ content: '❌ La scommessa deve essere maggiore di 0.', ephemeral: true });
+      }
+      if (userCoins < scommessa) {
+        return interaction.reply({ content: `❌ Non hai abbastanza EmberCoin. Bilancio attuale: **${userCoins}** 🪙`, ephemeral: true });
+      }
+
+      const icone = ['🍎', '💎', '🍀', '🔥', '👑'];
+      const r1 = icone[Math.floor(Math.random() * icone.length)];
+      const r2 = icone[Math.floor(Math.random() * icone.length)];
+      const r3 = icone[Math.floor(Math.random() * icone.length)];
+
+      let risultatoTesto = "";
+      let vincita = 0;
+      let coloreEmbed = "#ef4444"; 
+
+      if (r1 === r2 && r2 === r3) {
+        vincita = scommessa * 4;
+        coloreEmbed = "#22c55e";
+        risultatoTesto = `🎉 **JACKPOT!** Hai trovato tre simboli uguali! Moltiplicatore **x4**.\nHai vinto **${vincita} EmberCoin**!`;
+        ecoCoins.set(user.id, userCoins + (vincita - scommessa));
+      } else if (r1 === r2 || r2 === r3 || r1 === r3) {
+        vincita = Math.floor(scommessa * 1.5);
+        coloreEmbed = "#eab308";
+        risultatoTesto = `✨ **Quasi Jackpot!** Due simboli uguali! Moltiplicatore **x1.5**.\nHai vinto **${vincita} EmberCoin**!`;
+        ecoCoins.set(user.id, userCoins + (vincita - scommessa));
+      } else {
+        risultatoTesto = `😭 **Hai perso!** Nessun simbolo corrisponde. Hai perso **${scommessa} EmberCoin**.`;
+        ecoCoins.set(user.id, userCoins - scommessa);
+      }
+
+      const nuovoBilancio = ecoCoins.get(user.id);
+      const embedSlots = new EmbedBuilder()
+        .setTitle('🎰 EMBERMC SLOT MACHINE')
+        .setDescription(` Guadagni e perdite in tempo reale.\n\n**[ ${r1} | ${r2} | ${r3} ]**\n\n${risultatoTesto}\n\n🪙 Nuovo Bilancio: **${nuovoBilancio}** EmberCoin.`)
+        .setColor(coloreEmbed)
+        .setTimestamp();
+
+      return interaction.reply({ embeds: [embedSlots] });
+    }
+
+    if (commandName === 'compito') {
+      const targetUser = options.getUser('player');
+      const desc = options.getString('descrizione');
+      return interaction.reply({ content: `✅ Compito assegnato con successo a ${targetUser}:\n📝 **Dettagli:** ${desc}` });
+    }
+
+    if (commandName === 'set') {
+      const targetUser = options.getUser('player');
+      const amount = options.getInteger('monete');
+      ecoCoins.set(targetUser.id, amount);
+      return interaction.reply({ content: `✅ Hai impostato correttamente **${amount} EmberCoin** per il player ${targetUser}.` });
     }
 
     if (commandName === 'top-messaggi') {
-      const sorted = [...statMessaggi.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+      const allMsg = Array.from(statMessaggi.entries());
+      const sorted = allMsg.sort((a, b) => b[1] - a[1]).slice(0, 10);
       if (sorted.length === 0) return interaction.reply({ content: "Nessun dato registrato per questo mese." });
       let str = sorted.map((entry, index) => `${index + 1}. <@${entry[0]}> - **${entry[1]}** messaggi`).join('\n');
       return interaction.reply({ embeds: [new EmbedBuilder().setTitle("🏆 TOP 10 CHAT MENSILE").setDescription(str).setColor("#ea580c")] });
     }
 
     if (commandName === 'top-vocale') {
-      const sorted = [...statVocale.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+      const allVocale = Array.from(statVocale.entries());
+      const sorted = allVocale.sort((a, b) => b[1] - a[1]).slice(0, 10);
       if (sorted.length === 0) return interaction.reply({ content: "Nessun dato registrato per questo mese." });
       let str = sorted.map((entry, index) => {
         const min = Math.floor(entry[1] / 60000);
         return `${index + 1}. <@${entry[0]}> - **${min}** minuti`;
       }).join('\n');
       return interaction.reply({ embeds: [new EmbedBuilder().setTitle("🏆 TOP 10 VOCALE MENSILE").setDescription(str).setColor("#ea580c")] });
+    }
+
+    // 🐛 FIX ERRORE /TESTO QUI
+    if (commandName === 'testo') {
+      const targetChannel = options.getChannel('canale');
+      const tipo = options.getString('tipo');
+      const contenuto = options.getString('contenuto').replace(/\\n/g, '\n');
+      const titolo = options.getString('titolo');
+
+      if (!targetChannel.isTextBased()) {
+        return interaction.reply({ content: '❌ Seleziona un canale testuale valido.', ephemeral: true });
+      }
+
+      if (tipo === 'normale') {
+        await targetChannel.send({ content: contenuto }); // ORA È CORRETTO!
+      } else if (tipo === 'embed') {
+        const embedMsg = new EmbedBuilder()
+          .setDescription(contenuto)
+          .setColor('#ea580c');
+        if (titolo) embedMsg.setTitle(titolo);
+        await targetChannel.send({ embeds: [embedMsg] });
+      }
+      return interaction.reply({ content: `✅ Messaggio inviato correttamente in ${targetChannel}.`, ephemeral: true });
     }
 
     if (commandName === 'ticket') {
@@ -351,18 +592,18 @@ client.on('interactionCreate', async (interaction) => {
         userPunizioni.set(targetUser.id, lista);
         return interaction.reply({ content: `🔇 Muto applicato a ${targetUser} per ${durata}.` });
       }
-      return interaction.reply({ content: "❌ Impossibile applicare il mute.", ephemeral: true });
+      return interaction.reply({ content: "❌ Impossibile applicare il mute. Controlla il formato della durata (es: 10m, 2h).", ephemeral: true });
     }
 
     if (commandName === 'ban') {
       const targetUser = options.getUser('player');
       const motivo = options.getString('motivo');
-      const durata = options.getString('durata');
+      const durability = options.getString('durata');
       await guild.members.ban(targetUser.id, { reason: motivo });
       const lista = userPunizioni.get(targetUser.id) || [];
-      lista.push({ tipo: "ban", motivo: motivo, durata: durata });
+      lista.push({ tipo: "ban", motivo: motivo, durata: durability });
       userPunizioni.set(targetUser.id, lista);
-      return interaction.reply({ content: `🔴 Ban eseguito su ${targetUser.username}. Durata: ${durata}` });
+      return interaction.reply({ content: `🔴 Ban eseguito su ${targetUser.username}. Durata: ${durability}` });
     }
 
     if (commandName === 'history') {
@@ -425,8 +666,126 @@ client.on('interactionCreate', async (interaction) => {
         await channel.delete().catch(() => {});
       }, 4000);
     }
+
+    if (commandName === 'userinfo') {
+      const targetUser = options.getUser('player');
+      const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+      
+      const coins = ecoCoins.get(targetUser.id) || 0;
+      const warnCount = userWarns.get(targetUser.id) || 0;
+      const messaggi = statMessaggi.get(targetUser.id) || 0;
+      const minutiVocale = Math.floor((statVocale.get(targetUser.id) || 0) / 60000);
+      const ticketAperti = userTicketHistory.get(targetUser.id)?.length || 0;
+
+      const embedInfo = new EmbedBuilder()
+        .setAuthor({ name: `Informazioni Utente: ${targetUser.tag}`, iconURL: targetUser.displayAvatarURL() })
+        .setColor('#ea580c')
+        .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+        .addFields(
+          { name: '🆔 ID Utente', value: `\`${targetUser.id}\``, inline: true },
+          { name: '📆 Account Creato', value: `<t:${Math.floor(targetUser.createdTimestamp / 1000)}:R>`, inline: true },
+          { name: '📥 Entrato nel Server', value: targetMember ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:R>` : 'Non presente', inline: true },
+          { name: '🪙 EmberCoin', value: `**${coins}**`, inline: true },
+          { name: '⚠️ Ammonizioni (Warn)', value: `**${warnCount}/3**`, inline: true },
+          { name: '🎫 Ticket Totali', value: `**${ticketAperti}**`, inline: true },
+          { name: '💬 Messaggi Mese', value: `**${messaggi}**`, inline: true },
+          { name: '🔊 Tempo in Vocale', value: `**${minutiVocale} minuti**`, inline: true }
+        )
+        .setFooter({ text: 'EmberMC Staff Administration' })
+        .setTimestamp();
+
+      return interaction.reply({ embeds: [embedInfo], ephemeral: true });
+    }
+
+    if (commandName === 'tag') {
+      const scelta = options.getString('nome_tag');
+      
+      const dizionarioTags = {
+        reset_pass: "⚙️ **RESET PASSWORD**\nPer poter effettuare il reset della password del tuo account SP, ti chiediamo gentilmente di allegare qui sotto uno screenshot intero del tuo launcher Premium o la ricevuta d'acquisto originale del gioco. Un amministratore provvederà al reset il prima possibile.",
+        store_mancato: "🛒 **MANCATO ARRIVO ACQUISTO**\nGli acquisti sullo Store possono richiedere fino a 15 minuti per essere elaborati in gioco. Se è già passato questo lasso di tempo, fornisci la ricevuta d'acquisto arrivata sulla tua email e specifica il tuo nickname esatto di gioco.",
+        cheat_prove: "⚠️ **SEGNALAZIONE CHEATER**\nGrazie per la tua segnalazione. Per procedere con la sanzione dell'utente segnalato, è strettamente necessario allegare una prova video chiara e non modificata. Non accettiamo screenshot per segnalazioni di cheat.",
+        richiesta_unban: "🔨 **RICHIESTA UNBAN / UNMUTE**\nSe ritieni che la sanzione applicata sul tuo account sia ingiusta, spiega dettagliatamente la tua versioni dei fatti. Lo staffer che ha applicato la sanzione esaminerà la tua richiesta ed esprimerà un verdetto definitivo.",
+        candidature_staff: "💼 **CANDIDATURE STAFF**\nLe candidature per entrare a far parte del nostro Staff sono attualmente gestite tramite i canali dedicati o durante i provini ufficiali. Rimani sintonizzato nei canali degli annunci per non perdere le date di apertura dei moduli.",
+        candidature_media: "🎥 **REQUISITI MEDIA (YOUTUBE/TWITCH/TIKTOK)**\nPer ottenere il rank Media su EmberMC devi soddisfare i requisiti minimi scritti nel canale informazioni. Se ritieni di soddisfarli, allega il link del tuo canale e le ultime statistiche di visualizzazioni.",
+        segnalazione_bug: "🐛 **SEGNALAZIONE BUG**\nTi ringraziamo per haber riscontrato questa anomalia. Descrivi dettagliatamente come riprodurre il bug e, se possibile, allega un video o uno screenshot. Il reparto tecnico si metterà al lavoro per risolverlo.",
+        transfer_account: "🔄 **TRASFERIMENTO ACCOUNT**\nIl trasferimento di statistiche, inventari o pacchetti acquistati da un account a un altro è consentito solo in casi eccezionali. Fornisci le prove di proprietà di entrambi i nickname per consentire le verifiche dei gestori.",
+        lag_connessione: "🌐 **PROBLEMI DI LAG / CONNESSIONE**\nSe stai riscontrando problemi di stabilità, prova a riavviare il router o a cambiare versione di Minecraft (consigliamo l'uso della versione nativa del server con Optifine o Sodium). Se il problema persiste, fornisci un report MTR.",
+        furto_survival: "🏕️ **FURTO O GRIEF IN SURVIVAL**\nTi ricordiamo che nelle zone non protette tramite claim il griefing e il furto sono dinamiche di gioco. Se l'infrazione è avvenuta all'interno di una zona correttamente claimata, fornisci le coordinate esatte (`X`, `Y`, `Z`) per i controlli dei log.",
+        rimborso_bug: "💰 **RICHIESTA RIMBORSO ITEM**\nIl server non effettua rimborsi di oggetti persi a causa di morti regolari o disattenzioni. Se la perdita è derivata da un bug palese del server, allega una prova video antecedente e successiva all'evento.",
+        tossicita_chat: "💬 **COMPORTAMENTO TOSSICO / INSULTI**\nIl rispetto reciproco è alla base della nostra community. Allega uno screenshot chiaro e non tagliato della chat di gioco in cui si vedono gli insulti, comprensivo di timestamp. Prenderemo provvedimenti immediati.",
+        info_provini: "🎙️ **INFORMAZIONI SUI PROVINI VOCALI**\nI provini vocali vengono annunciati con largo anticipo. Assicurati di avere un microfono funzionante, un'età minima consona e una buona conoscenza del regolamento del server prima di presentarti nella stanza d'attesa.",
+        abuso_staff: "⚖️ **SEGNALAZIONE ABUSO STAFF**\nPrendiamo molto sul serio la condotta dei nostri collaboratori. Se ritieni che uno staffer abbia abusato dei suoi poteri, descrivi la situazione inserendo date, orari e prove tangibili. Questo ticket verrà letto solo dall'amministrazione.",
+        store_duplicato: "🧾 **ACQUISTO DUPLICATO**\nSe hai pagato due volte per lo stesso identico pacchetto per errore, non aprire una pratica di disputa su PayPal o Stripe, pena il ban automatico. Fornisci qui i due ID di transazione per ricevere il rimborso diretto.",
+        info_builder: "🧱 **CANDIDATURA BUILDER**\nSei un costruttore? Per candidarti nel Team Builder di EmberMC, invia qui sotto un portfolio fotografico dei tuoi lavori migliori o dei video di strutture interamente realizzate da te, indicando da quanto tempo buildi.",
+        problemi_login: "🔑 **PROBLEMI DI AUTENTICAZIONE**\nSe ricevi errori del tipo 'Sessione non valida' o 'Impossibile verificare il nome utente', prova a riavviare il tuo client di gioco o ad effettuare il logout e login dal tuo launcher ufficiale di Minecraft.",
+        proposte_server: "💡 **PROPOSTE E SUGGERIMENTI**\nSiamo sempre felici di ascoltare la community. Esponi la tua idea in modo chiaro specificando quale modalità andrebbe a migliorare e quali sarebbero i vantaggi pratici per l'utenza.",
+        candidatura_eventi: "🎁 **ORGANIZZAZIONE EVENTI**\nSei un content creator o vuoi proporre un evento speciale sul server? Spiega la struttura dell'evento, lo spazio necessario all'interno delle modalità e i premi in palio previsti per i vincitori.",
+        chiusura_inattivo: "💤 **CHIUSURA TICKET PER INATTIVITÀ**\nQuesto ticket non ha ricevuto aggiornamenti da diverse ore. Per questo motivo, la pratica viene considerata risolta e archiviata. Se hai ancora bisogno di supporto, non esitare ad aprire un nuovo ticket."
+      };
+
+      const rispostaScelta = dizionarioTags[scelta];
+      return interaction.reply({ content: rispostaScelta });
+    }
+
+    if (commandName === 'partner') {
+      const sub = options.getSubcommand();
+
+      if (sub === 'add') {
+        const utentePartner = options.getUser('utente');
+        const nomeServer = options.getString('nome');
+        const linkInvito = options.getString('link');
+
+        const currentStats = partnerStats.get(user.id) || 0;
+        partnerStats.set(user.id, currentStats + 1);
+
+        const embedPartner = new EmbedBuilder()
+          .setTitle(`🤝 NUOVA PARTNERSHIP: ${nomeServer.toUpperCase()}`)
+          .setDescription(`EmberMC ha stretto una nuova collaborazione con **${nomeServer}**!\n\n**👤 Rappresentante:** ${utentePartner}\n🔗 **Link d'Invito:** ${linkInvito}\n\n*Partnership registrata da lo staffer: ${user}*`)
+          .setColor('#22c55e')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [embedPartner] });
+      }
+
+      if (sub === 'stats') {
+        const staffer = options.getUser('staffer');
+        const count = partnerStats.get(staffer.id) || 0;
+        return interaction.reply({ content: `📊 Lo staffer ${staffer} ha completato e registrato **${count}** partnership complessive.`, ephemeral: true });
+      }
+
+      if (sub === 'verificare') {
+        const link = options.getString('link');
+        if (!link.includes('discord.gg') && !link.includes('discord.com/invite')) {
+          return interaction.reply({ content: '❌ Questo non sembra un link d\'invito Discord valido.', ephemeral: true });
+        }
+        return interaction.reply({ content: `🔎 Richiesta di controllo avviata per l'invito \`${link}\`. Lo stato verrà stampato nella console del bot.`, ephemeral: true });
+      }
+    }
+
+    if (commandName === 'regala-coin') {
+      const targetUser = options.getUser('player');
+      const amount = options.getInteger('monete');
+
+      if (amount <= 0) {
+        return interaction.reply({ content: '❌ Inserisci una quantità di monete maggiore di 0.', ephemeral: true });
+      }
+
+      const bilancioAttuale = ecoCoins.get(targetUser.id) || 0;
+      ecoCoins.set(targetUser.id, bilancioAttuale + amount);
+
+      const embedPremio = new EmbedBuilder()
+        .setTitle('🎁 PREMIO EVENTO EMBERCOIN')
+        .setDescription(`Il player ${targetUser} ha ricevuto in regalo **${amount} EmberCoin** direttamente dallo Staff!\n\n🏆 **Complimenti!**`)
+        .setColor('#eab308')
+        .setTimestamp();
+
+      return interaction.reply({ embeds: [embedPremio] });
+    }
   }
 
+  // ==========================================
+  // 🔘 GESTIONE BOTTONI DEI TICKET
+  // ==========================================
   if (interaction.isButton()) {
     const { customId, user, guild } = interaction;
 
