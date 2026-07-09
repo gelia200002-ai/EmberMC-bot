@@ -12,7 +12,10 @@ const {
   SlashCommandBuilder
 } = require('discord.js');
 const express = require('express');
-const Enmap = require('enmap'); // 💾 NUOVO: Modulo per il Database persistente
+
+// 💾 FIX RENDER: Importazione sicura per Enmap v6+
+const { Enmap } = require('enmap'); 
+const fallbackEnmap = Enmap || require('enmap').default || require('enmap');
 
 // ==========================================
 // ⚙️ CONFIGURAZIONE ID EMBERMC
@@ -42,17 +45,15 @@ const CATEGORIE_TICKET = {
 // ==========================================
 // 💾 DATABASE PERSISTENTE E MAPPE TEMPORANEE
 // ==========================================
-// Dati che NON andranno mai persi al riavvio
-const ecoCoins = new Enmap({ name: 'ecoCoins' });
-const ecoDaily = new Enmap({ name: 'ecoDaily' });
-const userWarns = new Enmap({ name: 'userWarns' }); 
-const userTicketHistory = new Enmap({ name: 'userTicketHistory' }); 
-const userPunizioni = new Enmap({ name: 'userPunizioni' }); 
-const statMessaggi = new Enmap({ name: 'statMessaggi' }); 
-const statVocale = new Enmap({ name: 'statVocale' }); 
-const partnerStats = new Enmap({ name: 'partnerStats' }); 
+const ecoCoins = new fallbackEnmap({ name: 'ecoCoins' });
+const ecoDaily = new fallbackEnmap({ name: 'ecoDaily' });
+const userWarns = new fallbackEnmap({ name: 'userWarns' }); 
+const userTicketHistory = new fallbackEnmap({ name: 'userTicketHistory' }); 
+const userPunizioni = new fallbackEnmap({ name: 'userPunizioni' }); 
+const statMessaggi = new fallbackEnmap({ name: 'statMessaggi' }); 
+const statVocale = new fallbackEnmap({ name: 'statVocale' }); 
+const partnerStats = new fallbackEnmap({ name: 'partnerStats' }); 
 
-// Dati temporanei legati alla sessione in corso (non serve salvarli nel DB)
 const ticketOwners = new Map();
 const ticketAssigned = new Map(); 
 const ticketCounts = new Map();
@@ -395,7 +396,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (commandName === 'leaderboard') {
-      // Dato che Enmap è iterabile o offre fetchEverything, estraiamo i dati così:
       const allCoins = Array.from(ecoCoins.entries());
       const sorted = allCoins.sort((a, b) => b[1] - a[1]);
       const top10 = sorted.slice(0, 10);
@@ -494,7 +494,6 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ embeds: [new EmbedBuilder().setTitle("🏆 TOP 10 VOCALE MENSILE").setDescription(str).setColor("#ea580c")] });
     }
 
-    // 🐛 FIX ERRORE /TESTO QUI
     if (commandName === 'testo') {
       const targetChannel = options.getChannel('canale');
       const tipo = options.getString('tipo');
@@ -506,7 +505,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (tipo === 'normale') {
-        await targetChannel.send({ content: contenuto }); // ORA È CORRETTO!
+        await targetChannel.send({ content: contenuto });
       } else if (tipo === 'embed') {
         const embedMsg = new EmbedBuilder()
           .setDescription(contenuto)
